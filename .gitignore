@@ -10,6 +10,10 @@
 *.dll
 *.dylib
 
+# Exception: embedded assets (e.g. Mesa opengl32.dll baked in via go:embed).
+# Anything under an assets/ directory is intentionally part of the source.
+!**/assets/**
+
 # Common extensionless executables
 /a.out
 /my_tool

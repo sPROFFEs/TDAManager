@@ -53,7 +53,7 @@ BUILD_PACKAGE="./cmd/flow-launcher"
 LDFLAGS_COMMON="-s -w -X main.Version=${APP_VERSION}"
 LDFLAGS_WINDOWS="${LDFLAGS_COMMON} -H=windowsgui"
 
-EXTRA_BUILD_FLAGS=(-trimpath)
+EXTRA_BUILD_FLAGS=(-trimpath -buildvcs=false)
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
