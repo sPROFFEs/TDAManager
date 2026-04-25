@@ -7,7 +7,7 @@ on:
 
 jobs:
   plan:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     env:
       PROJECT_LANG: 'go'
       BUILD_LINUX: '1'
@@ -79,7 +79,7 @@ jobs:
   build_cross:
     needs: plan
     if: ${{ needs.plan.outputs.cross_supported == '1' }}
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     env:
       PROJECT_LANG: ${{ needs.plan.outputs.project_lang }}
       BUILD_LINUX: ${{ needs.plan.outputs.wants_linux }}
@@ -224,7 +224,7 @@ jobs:
   build_native_linux:
     needs: plan
     if: ${{ needs.plan.outputs.cross_supported == '0' && needs.plan.outputs.wants_linux == '1' }}
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     env:
       PROJECT_LANG: ${{ needs.plan.outputs.project_lang }}
       BUILD_LINUX: '1'
@@ -362,7 +362,7 @@ jobs:
   build_native_windows:
     needs: plan
     if: ${{ needs.plan.outputs.cross_supported == '0' && needs.plan.outputs.wants_windows == '1' }}
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows]
     env:
       PROJECT_LANG: ${{ needs.plan.outputs.project_lang }}
       BUILD_LINUX: '0'
@@ -469,7 +469,7 @@ jobs:
           (needs.build_cross.result == 'success' ||
            needs.build_native_linux.result == 'success' ||
            needs.build_native_windows.result == 'success') }}
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: write
     steps:
