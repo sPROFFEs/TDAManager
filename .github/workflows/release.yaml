@@ -1,0 +1,584 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  plan:
+    runs-on: [self-hosted, linux]
+    env:
+      PROJECT_LANG: 'go'
+      BUILD_LINUX: '1'
+      BUILD_WINDOWS: '1'
+    outputs:
+      project_lang: ${{ steps.plan.outputs.project_lang }}
+      cross_supported: ${{ steps.plan.outputs.cross_supported }}
+      wants_linux: ${{ steps.plan.outputs.wants_linux }}
+      wants_windows: ${{ steps.plan.outputs.wants_windows }}
+      build_mode: ${{ steps.plan.outputs.build_mode }}
+    steps:
+      - name: Validate selectors and compute build strategy
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LANG="${PROJECT_LANG}"
+          WL="${BUILD_LINUX}"
+          WW="${BUILD_WINDOWS}"
+
+          case "$LANG" in
+            go|python|rust|node|java|dotnet|ruby|php|c|cpp) ;;
+            *)
+              echo "ERROR: PROJECT_LANG invalido: $LANG"
+              echo "Valores permitidos: go | python | rust | node | java | dotnet | ruby | php | c | cpp"
+              exit 1
+              ;;
+          esac
+
+          case "$WL" in 0|1) ;; *) echo "ERROR: BUILD_LINUX debe ser 0 o 1"; exit 1 ;; esac
+          case "$WW" in 0|1) ;; *) echo "ERROR: BUILD_WINDOWS debe ser 0 o 1"; exit 1 ;; esac
+
+          if [ "$WL" = "0" ] && [ "$WW" = "0" ]; then
+            echo "ERROR: al menos una plataforma debe estar habilitada (BUILD_LINUX/BUILD_WINDOWS)."
+            exit 1
+          fi
+
+          CROSS_SUPPORTED="0"
+          case "$LANG" in
+            go|rust|node|dotnet|java|ruby|php)
+              CROSS_SUPPORTED="1"
+              ;;
+            python|c|cpp)
+              CROSS_SUPPORTED="0"
+              ;;
+          esac
+
+          if [ "$CROSS_SUPPORTED" = "1" ]; then
+            MODE="cross"
+          else
+            if [ "$WL" = "1" ] && [ "$WW" = "1" ]; then
+              MODE="native_dual"
+            else
+              MODE="native_single"
+            fi
+          fi
+
+          {
+            echo "project_lang=$LANG"
+            echo "cross_supported=$CROSS_SUPPORTED"
+            echo "wants_linux=$WL"
+            echo "wants_windows=$WW"
+            echo "build_mode=$MODE"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Strategy computed: LANG=$LANG CROSS_SUPPORTED=$CROSS_SUPPORTED WL=$WL WW=$WW MODE=$MODE"
+
+  build_cross:
+    needs: plan
+    if: ${{ needs.plan.outputs.cross_supported == '1' }}
+    runs-on: [self-hosted, linux]
+    env:
+      PROJECT_LANG: ${{ needs.plan.outputs.project_lang }}
+      BUILD_LINUX: ${{ needs.plan.outputs.wants_linux }}
+      BUILD_WINDOWS: ${{ needs.plan.outputs.wants_windows }}
+      GO_VERSION: '1.22.5'
+      PYTHON_VERSION: '3.11'
+      RUST_TOOLCHAIN: 'stable'
+      NODE_VERSION: '20'
+      JAVA_VERSION: '21'
+      DOTNET_VERSION: '8.0.x'
+      RUBY_VERSION: '3.3'
+      PHP_VERSION: '8.3'
+      DEBIAN_FRONTEND: noninteractive
+      GOPATH: ${{ github.workspace }}/.go
+      GOMODCACHE: ${{ github.workspace }}/.go/pkg/mod
+      GOCACHE: ${{ github.workspace }}/.cache/go-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        if: ${{ env.PROJECT_LANG == 'go' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Python
+        if: ${{ env.PROJECT_LANG == 'python' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup Rust
+        if: ${{ env.PROJECT_LANG == 'rust' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq \
+              -o Dpkg::Options::=--force-confdef \
+              -o Dpkg::Options::=--force-confold \
+              curl ca-certificates > /dev/null
+            curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain "${RUST_TOOLCHAIN}"
+          fi
+          . "$HOME/.cargo/env"
+          rustup toolchain install "${RUST_TOOLCHAIN}"
+          rustup default "${RUST_TOOLCHAIN}"
+          rustc --version
+          cargo --version
+
+      - name: Setup Node.js
+        if: ${{ env.PROJECT_LANG == 'node' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Java
+        if: ${{ env.PROJECT_LANG == 'java' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup .NET
+        if: ${{ env.PROJECT_LANG == 'dotnet' }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Ruby
+        if: ${{ env.PROJECT_LANG == 'ruby' }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+
+      - name: Setup PHP
+        if: ${{ env.PROJECT_LANG == 'php' }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+
+      - name: Build from tag version (cross-supported mode)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export APP_VERSION="${GITHUB_REF_NAME#v}"
+          export BUILD_LINUX="${BUILD_LINUX}"
+          export BUILD_WINDOWS="${BUILD_WINDOWS}"
+          ./build.sh
+
+      - name: Package Linux binary with FPM (.deb)
+        if: ${{ needs.plan.outputs.wants_linux == '1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          apt-get update -qq
+          apt-get install -y -qq \
+            -o Dpkg::Options::=--force-confdef \
+            -o Dpkg::Options::=--force-confold \
+            ruby ruby-dev rubygems build-essential > /dev/null
+          gem install --no-document fpm
+
+          mkdir -p pkg-root/usr/local/bin
+          LINUX_BIN=""
+
+          while IFS= read -r file; do
+            if file "$file" | grep -q 'ELF'; then
+              LINUX_BIN="$file"
+              break
+            fi
+          done < <(find dist -maxdepth 1 -type f | sort)
+
+          if [ -n "$LINUX_BIN" ]; then
+            install -m 0755 "$LINUX_BIN" "pkg-root/usr/local/bin/$(basename "$LINUX_BIN")"
+            fpm \
+              -s dir \
+              -t deb \
+              -n my_tool \
+              -v "$VERSION" \
+              --architecture amd64 \
+              -C pkg-root \
+              usr
+          else
+            echo "No Linux ELF binary found in dist/. Skipping .deb packaging."
+          fi
+
+      - name: Upload build artifacts (cross mode)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-cross
+          path: |
+            dist/*
+            *.deb
+          if-no-files-found: error
+
+  build_native_linux:
+    needs: plan
+    if: ${{ needs.plan.outputs.cross_supported == '0' && needs.plan.outputs.wants_linux == '1' }}
+    runs-on: [self-hosted, linux]
+    env:
+      PROJECT_LANG: ${{ needs.plan.outputs.project_lang }}
+      BUILD_LINUX: '1'
+      BUILD_WINDOWS: '0'
+      GO_VERSION: '1.22.5'
+      PYTHON_VERSION: '3.11'
+      RUST_TOOLCHAIN: 'stable'
+      NODE_VERSION: '20'
+      JAVA_VERSION: '21'
+      DOTNET_VERSION: '8.0.x'
+      RUBY_VERSION: '3.3'
+      PHP_VERSION: '8.3'
+      DEBIAN_FRONTEND: noninteractive
+      GOPATH: ${{ github.workspace }}/.go
+      GOMODCACHE: ${{ github.workspace }}/.go/pkg/mod
+      GOCACHE: ${{ github.workspace }}/.cache/go-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        if: ${{ env.PROJECT_LANG == 'go' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Python
+        if: ${{ env.PROJECT_LANG == 'python' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup Node.js
+        if: ${{ env.PROJECT_LANG == 'node' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Java
+        if: ${{ env.PROJECT_LANG == 'java' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup .NET
+        if: ${{ env.PROJECT_LANG == 'dotnet' }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Ruby
+        if: ${{ env.PROJECT_LANG == 'ruby' }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+
+      - name: Setup PHP
+        if: ${{ env.PROJECT_LANG == 'php' }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+
+      - name: Setup C/C++ toolchain (Linux)
+        if: ${{ env.PROJECT_LANG == 'c' || env.PROJECT_LANG == 'cpp' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq \
+            -o Dpkg::Options::=--force-confdef \
+            -o Dpkg::Options::=--force-confold \
+            build-essential cmake ninja-build pkg-config > /dev/null
+          gcc --version | head -n 1
+          cmake --version | head -n 1
+
+      - name: Build from tag version (native Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export APP_VERSION="${GITHUB_REF_NAME#v}"
+          export BUILD_LINUX="${BUILD_LINUX}"
+          export BUILD_WINDOWS="${BUILD_WINDOWS}"
+          ./build.sh
+
+      - name: Package Linux binary with FPM (.deb)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          apt-get update -qq
+          apt-get install -y -qq \
+            -o Dpkg::Options::=--force-confdef \
+            -o Dpkg::Options::=--force-confold \
+            ruby ruby-dev rubygems build-essential > /dev/null
+          gem install --no-document fpm
+
+          mkdir -p pkg-root/usr/local/bin
+          LINUX_BIN=""
+
+          while IFS= read -r file; do
+            if file "$file" | grep -q 'ELF'; then
+              LINUX_BIN="$file"
+              break
+            fi
+          done < <(find dist -maxdepth 1 -type f | sort)
+
+          if [ -n "$LINUX_BIN" ]; then
+            install -m 0755 "$LINUX_BIN" "pkg-root/usr/local/bin/$(basename "$LINUX_BIN")"
+            fpm \
+              -s dir \
+              -t deb \
+              -n my_tool \
+              -v "$VERSION" \
+              --architecture amd64 \
+              -C pkg-root \
+              usr
+          else
+            echo "No Linux ELF binary found in dist/. Skipping .deb packaging."
+          fi
+
+      - name: Upload build artifacts (native Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-native-linux
+          path: |
+            dist/*
+            *.deb
+          if-no-files-found: error
+
+  build_native_windows:
+    needs: plan
+    if: ${{ needs.plan.outputs.cross_supported == '0' && needs.plan.outputs.wants_windows == '1' }}
+    runs-on: [self-hosted, windows]
+    env:
+      PROJECT_LANG: ${{ needs.plan.outputs.project_lang }}
+      BUILD_LINUX: '0'
+      BUILD_WINDOWS: '1'
+      GO_VERSION: '1.22.5'
+      PYTHON_VERSION: '3.11'
+      NODE_VERSION: '20'
+      JAVA_VERSION: '21'
+      DOTNET_VERSION: '8.0.x'
+      RUBY_VERSION: '3.3'
+      PHP_VERSION: '8.3'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        if: ${{ env.PROJECT_LANG == 'go' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Python
+        if: ${{ env.PROJECT_LANG == 'python' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup Node.js
+        if: ${{ env.PROJECT_LANG == 'node' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Java
+        if: ${{ env.PROJECT_LANG == 'java' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup .NET
+        if: ${{ env.PROJECT_LANG == 'dotnet' }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Ruby
+        if: ${{ env.PROJECT_LANG == 'ruby' }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+
+      - name: Setup PHP
+        if: ${{ env.PROJECT_LANG == 'php' }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+
+      - name: Setup C/C++ toolchain (Windows)
+        if: ${{ env.PROJECT_LANG == 'c' || env.PROJECT_LANG == 'cpp' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Windows runners normally ship MinGW, MSVC, and CMake. GNU make is
+          # often missing — install it via Chocolatey if it's not on PATH.
+          if ! command -v make >/dev/null 2>&1; then
+            choco install -y --no-progress make >/dev/null
+          fi
+          gcc --version | head -n 1 || true
+          cmake --version | head -n 1 || true
+          make --version | head -n 1
+
+      - name: Build from tag version (native Windows)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export APP_VERSION="${GITHUB_REF_NAME#v}"
+          export BUILD_LINUX="${BUILD_LINUX}"
+          export BUILD_WINDOWS="${BUILD_WINDOWS}"
+          ./build.sh
+
+      - name: Upload build artifacts (native Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-native-windows
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build_cross, build_native_linux, build_native_windows]
+    # always() forces this job's if-expression to be evaluated even when upstream
+    # jobs were skipped (e.g. build_cross skipped for Python, build_native_linux
+    # skipped for Windows-only builds).  Without it GitHub propagates the
+    # skipped status directly to this job and never checks the expression.
+    if: >-
+      ${{ always() &&
+          needs.plan.result == 'success' &&
+          needs.build_cross.result != 'failure' &&
+          needs.build_native_linux.result != 'failure' &&
+          needs.build_native_windows.result != 'failure' &&
+          (needs.build_cross.result == 'success' ||
+           needs.build_native_linux.result == 'success' ||
+           needs.build_native_windows.result == 'success') }}
+    runs-on: [self-hosted, linux]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts from all build jobs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-artifacts-*
+          merge-multiple: true
+          path: release-files
+          # Artifact names that were never uploaded (skipped build jobs) are
+          # silently ignored; we only fail later if release-files/ is empty.
+          error-on-no-match: false
+
+      - name: Assert release files exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d release-files || { echo "ERROR: release-files/ no existe"; exit 1; }
+          test -n "$(find release-files -type f -print -quit)" || { echo "ERROR: no hay artefactos para publicar"; exit 1; }
+
+      - name: Extract changelog notes (strict awk state machine)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          NOTES="$(awk -v v="$VERSION" '
+            BEGIN {
+              target = "## [" v "]"
+              target_with_date = target " - "
+              found = 0
+            }
+            $0 ~ /^## \[/ {
+              if ($0 == target || index($0, target_with_date) == 1) {
+                found = 1
+                next
+              }
+              if (found == 1) {
+                exit
+              }
+            }
+            found == 1 {
+              print
+            }
+            END {
+              if (found == 0) {
+                exit 2
+              }
+            }
+          ' CHANGELOG.md)" || {
+            echo "ERROR: missing changelog entry for tag ${VERSION}."
+            echo "Required heading format: ## [${VERSION}] - YYYY-MM-DD"
+            exit 1
+          }
+
+          NOTES="$(printf '%s\n' "$NOTES" | sed '/^[[:space:]]*$/d')"
+          if [ -z "$NOTES" ]; then
+            echo "ERROR: changelog section for ${VERSION} is empty."
+            exit 1
+          fi
+
+          EOF_MARKER="CHANGELOG_$(date +%s)_$RANDOM"
+          {
+            echo "RELEASE_BODY<<${EOF_MARKER}"
+            printf '%s\n' "$NOTES"
+            echo "${EOF_MARKER}"
+          } >> "$GITHUB_ENV"
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-files
+
+          find . -type f -print | sed 's#^\./##' | sort > /tmp/release_file_list.txt
+          if [ ! -s /tmp/release_file_list.txt ]; then
+            echo "ERROR: no files to publish in release-files/."
+            exit 1
+          fi
+
+          : > checksums.sha256
+          while IFS= read -r f; do
+            sha256sum "$f" >> checksums.sha256
+          done < /tmp/release_file_list.txt
+
+          EOF_MARKER="SHA256_$(date +%s)_$RANDOM"
+          {
+            echo "SHA256_BLOCK<<${EOF_MARKER}"
+            cat checksums.sha256
+            echo "${EOF_MARKER}"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            release-files/**
+          body: |
+            ${{ env.RELEASE_BODY }}
+
+            ---
+            ### SHA256
+            ```text
+            ${{ env.SHA256_BLOCK }}
+            ```
