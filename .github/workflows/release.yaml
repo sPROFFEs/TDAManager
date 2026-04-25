@@ -12,6 +12,9 @@ jobs:
       PROJECT_LANG: 'go'
       BUILD_LINUX: '1'
       BUILD_WINDOWS: '1'
+      # Fyne requires CGO + system OpenGL/X11 libs, so we use native dual-runner
+      # instead of the default Linux cross-compile job for Go.
+      FORCE_NATIVE: '1'
     outputs:
       project_lang: ${{ steps.plan.outputs.project_lang }}
       cross_supported: ${{ steps.plan.outputs.cross_supported }}
@@ -46,15 +49,21 @@ jobs:
             exit 1
           fi
 
+          case "${FORCE_NATIVE:-0}" in 0|1) ;; *) echo "ERROR: FORCE_NATIVE debe ser 0 o 1"; exit 1 ;; esac
+
           CROSS_SUPPORTED="0"
-          case "$LANG" in
-            go|rust|node|dotnet|java|ruby|php)
-              CROSS_SUPPORTED="1"
-              ;;
-            python|c|cpp)
-              CROSS_SUPPORTED="0"
-              ;;
-          esac
+          if [ "${FORCE_NATIVE:-0}" = "1" ]; then
+            CROSS_SUPPORTED="0"
+          else
+            case "$LANG" in
+              go|rust|node|dotnet|java|ruby|php)
+                CROSS_SUPPORTED="1"
+                ;;
+              python|c|cpp)
+                CROSS_SUPPORTED="0"
+                ;;
+            esac
+          fi
 
           if [ "$CROSS_SUPPORTED" = "1" ]; then
             MODE="cross"

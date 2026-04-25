@@ -1,0 +1,20 @@
+# Build output and release artifacts
+/dist/
+*.deb
+*.exe
+
+# Native/object/shared artifacts
+*.o
+*.so
+*.a
+*.dll
+*.dylib
+
+# Common extensionless executables
+/a.out
+/my_tool
+/cve-parser
+
+# Generic binary-like outputs
+*.bin
+*.out
