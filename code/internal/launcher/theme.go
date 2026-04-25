@@ -135,6 +135,14 @@ func (flowTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 		return colorBorder
 	case theme.ColorNameOverlayBackground:
 		return colorSurface
+	case theme.ColorNameMenuBackground:
+		// Backs the popup of widget.Select and other menus. Without this,
+		// Fyne falls back to its dark default in light mode.
+		return colorSurface
+	case theme.ColorNameHover:
+		// Hovered list/menu item — a faint tint of the border colour reads
+		// well on both light and dark surfaces.
+		return colorBorder
 	}
 	return theme.DefaultTheme().Color(n, v)
 }
