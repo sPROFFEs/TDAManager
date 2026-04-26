@@ -18,8 +18,6 @@ import (
 	"flow-launcher/internal/launcher/log"
 )
 
-// showBootstrapView builds the "New project" form. The actual work runs in
-// (*ui).bootstrap below, off the UI goroutine.
 func (u *ui) showBootstrapView() {
 	targetEntry := widget.NewEntry()
 	targetEntry.SetPlaceHolder("Folder where the repository will live")
@@ -44,35 +42,112 @@ func (u *ui) showBootstrapView() {
 	runnerWindowsEntry := widget.NewEntry()
 	runnerWindowsEntry.SetText(defaultRunnerWindows)
 
+	// toolNameEntry: used by compiled languages (lives in STACK section).
 	toolNameEntry := widget.NewEntry()
 	toolNameEntry.SetPlaceHolder("e.g. my-tool  (becomes the binary filename)")
 
-	langSelect := widget.NewSelect([]string{"go", "python", "rust", "node", "java", "dotnet", "ruby", "php", "c", "cpp"}, nil)
-	langSelect.SetSelected("go")
+	// archiveNameEntry: used by script/archive mode (lives in RELEASE ARTIFACT section).
+	archiveNameEntry := widget.NewEntry()
+	archiveNameEntry.SetPlaceHolder("e.g. my-scripts  (used as the zip filename)")
 
-	// Auto-fill tool name when the user picks a target folder.
+	// Auto-fill both from the target folder name.
 	targetEntry.OnChanged = func(dir string) {
-		if toolNameEntry.Text == "" && dir != "" {
-			toolNameEntry.SetText(sanitizeBinaryName(filepath.Base(dir)))
+		if dir == "" {
+			return
+		}
+		name := sanitizeBinaryName(filepath.Base(dir))
+		if toolNameEntry.Text == "" {
+			toolNameEntry.SetText(name)
+		}
+		if archiveNameEntry.Text == "" {
+			archiveNameEntry.SetText(name)
 		}
 	}
 
+	// ── Language & platform ──────────────────────────────────────────────────
+	langSelect := widget.NewSelect(
+		[]string{"go", "python", "rust", "node", "java", "dotnet", "ruby", "php", "c", "cpp", "script"},
+		nil,
+	)
+	langSelect.SetSelected("go")
+
 	crossInfo := muted("")
-	platformRadio := widget.NewRadioGroup([]string{"cross-compiling", "both native runners", "only linux", "only windows"}, nil)
+	platformRadio := widget.NewRadioGroup(
+		[]string{"cross-compiling", "both native runners", "only linux", "only windows"},
+		nil,
+	)
 	platformRadio.Horizontal = true
 	platformRadio.SetSelected("cross-compiling")
 
-	langSelect.OnChanged = func(lang string) {
-		if crossCompilingLanguages[lang] {
-			crossInfo.Text = "✓  Single Linux job builds both targets via cross-compilation. Pick 'both native runners' if you need CGO + system libs (e.g. Fyne)."
-			crossInfo.Color = colorOK
-			platformRadio.Options = []string{"cross-compiling", "both native runners", "only linux", "only windows"}
-			platformRadio.SetSelected("cross-compiling")
+	// toolNameRow lives in the STACK section — hidden for script projects.
+	toolNameRow := container.New(layout.NewFormLayout(),
+		widget.NewLabel("Tool name"), toolNameEntry,
+	)
+
+	// ── Release config (script projects only) ───────────────────────────────
+	releaseRadio := widget.NewRadioGroup(
+		[]string{"archive code/ folder", "specific files"},
+		nil,
+	)
+	releaseRadio.SetSelected("archive code/ folder")
+
+	// archiveNameRow lives inside the release section.
+	archiveNameRow := container.New(layout.NewFormLayout(),
+		widget.NewLabel("Archive name"), archiveNameEntry,
+	)
+
+	specificFilesHint := muted("File selection is available from the project dashboard once the repository is created.")
+	specificFilesHint.Hide()
+
+	releaseRadio.OnChanged = func(selected string) {
+		if selected == "specific files" {
+			archiveNameRow.Hide()
+			specificFilesHint.Show()
 		} else {
-			crossInfo.Text = "ℹ  This language requires native runners for each OS."
-			crossInfo.Color = colorWarn
-			platformRadio.Options = []string{"both native runners", "only linux", "only windows"}
-			platformRadio.SetSelected("both native runners")
+			archiveNameRow.Show()
+			specificFilesHint.Hide()
+		}
+	}
+
+	releaseSection := sectionPanel("Release artifact",
+		container.NewVBox(
+			releaseRadio,
+			archiveNameRow,
+			specificFilesHint,
+		))
+	releaseSection.Hide()
+
+	// ── Lang → platform adaptation ───────────────────────────────────────────
+	langSelect.OnChanged = func(lang string) {
+		if lang == "script" {
+			crossInfo.Text = "ℹ  No compilation needed — a single Linux job packages and publishes the release."
+			crossInfo.Color = colorMuted
+			platformRadio.Options = []string{"only linux"}
+			platformRadio.SetSelected("only linux")
+			platformRadio.Disable()
+			toolNameRow.Hide()
+			// Reset release section to archive mode.
+			releaseRadio.SetSelected("archive code/ folder")
+			archiveNameRow.Show()
+			specificFilesHint.Hide()
+			releaseSection.Show()
+			runnerWindowsEntry.Disable()
+		} else {
+			releaseSection.Hide()
+			toolNameRow.Show()
+			platformRadio.Enable()
+			runnerWindowsEntry.Enable()
+			if crossCompilingLanguages[lang] {
+				crossInfo.Text = "✓  Single Linux job builds both targets via cross-compilation. Pick 'both native runners' if you need CGO + system libs (e.g. Fyne)."
+				crossInfo.Color = colorOK
+				platformRadio.Options = []string{"cross-compiling", "both native runners", "only linux", "only windows"}
+				platformRadio.SetSelected("cross-compiling")
+			} else {
+				crossInfo.Text = "ℹ  This language requires native runners for each OS."
+				crossInfo.Color = colorWarn
+				platformRadio.Options = []string{"both native runners", "only linux", "only windows"}
+				platformRadio.SetSelected("both native runners")
+			}
 		}
 		crossInfo.Refresh()
 		platformRadio.Refresh()
@@ -95,10 +170,29 @@ func (u *ui) showBootstrapView() {
 			dialog.ShowError(fmt.Errorf("target folder and remote URL are required"), u.window)
 			return
 		}
-		binName := strings.TrimSpace(toolNameEntry.Text)
-		if binName == "" {
-			binName = sanitizeBinaryName(filepath.Base(dir))
+
+		isScript := langSelect.Selected == "script"
+		releaseMode := "archive"
+		releaseFiles := ""
+		var artifactName string
+
+		if isScript {
+			if releaseRadio.Selected == "specific files" {
+				releaseMode = "files"
+				artifactName = sanitizeBinaryName(filepath.Base(dir))
+			} else {
+				artifactName = strings.TrimSpace(archiveNameEntry.Text)
+				if artifactName == "" {
+					artifactName = sanitizeBinaryName(filepath.Base(dir))
+				}
+			}
+		} else {
+			artifactName = strings.TrimSpace(toolNameEntry.Text)
+			if artifactName == "" {
+				artifactName = sanitizeBinaryName(filepath.Base(dir))
+			}
 		}
+
 		runBtn.Disable()
 		backBtn.Disable()
 		progress.Show()
@@ -108,7 +202,8 @@ func (u *ui) showBootstrapView() {
 			strings.TrimSpace(runnerWindowsEntry.Text),
 			langSelect.Selected,
 			platformValue(platformRadio.Selected),
-			binName,
+			artifactName,
+			releaseMode, releaseFiles,
 			logBox,
 			func() {
 				runOnUI(func() {
@@ -138,12 +233,13 @@ func (u *ui) showBootstrapView() {
 			widget.NewFormItem("Remote URL", remoteEntry),
 		))
 
+	// Stack section: tool name row (hidden for script) + language + platforms.
 	stackSection := sectionPanel("Stack",
 		container.NewVBox(
-			widget.NewForm(
-				widget.NewFormItem("Tool name", toolNameEntry),
-				widget.NewFormItem("Language", langSelect),
-				widget.NewFormItem("Platforms", platformRadio),
+			toolNameRow,
+			container.New(layout.NewFormLayout(),
+				widget.NewLabel("Language"), langSelect,
+				widget.NewLabel("Platforms"), platformRadio,
 			),
 			crossInfo,
 		))
@@ -159,7 +255,7 @@ func (u *ui) showBootstrapView() {
 
 	activitySection := sectionPanel("Activity", container.NewVBox(progress, logBox))
 
-	body := container.NewVBox(locationSection, stackSection, runnersSection, activitySection)
+	body := container.NewVBox(locationSection, stackSection, releaseSection, runnersSection, activitySection)
 
 	actionBar := container.NewBorder(nil, nil, backBtn, runBtn, widget.NewLabel(""))
 
@@ -177,8 +273,7 @@ func (u *ui) showBootstrapView() {
 	u.setMainView(view)
 }
 
-// bootstrap runs the full setup pipeline off the UI goroutine.
-func (u *ui) bootstrap(target, remote, runnerLinux, runnerWindows, lang, platform, binaryName string, logBox *widget.Entry, done func()) {
+func (u *ui) bootstrap(target, remote, runnerLinux, runnerWindows, lang, platform, artifactName, releaseMode, releaseFiles string, logBox *widget.Entry, done func()) {
 	defer done()
 	logger := log.Default().With("op", "bootstrap", "target", target, "remote", remote, "lang", lang)
 	logger.Info("starting bootstrap")
@@ -241,21 +336,21 @@ func (u *ui) bootstrap(target, remote, runnerLinux, runnerWindows, lang, platfor
 	}
 	appendLog("✓ Remote reachable")
 
-	if err := configureTemplate(target, provider, lang, platform, runnerLinux, runnerWindows, binaryName); err != nil {
+	if err := configureTemplate(target, provider, lang, platform, runnerLinux, runnerWindows, artifactName, releaseMode, releaseFiles); err != nil {
 		showErr(err)
 		return
 	}
 	appendLog("✓ Workflow & build script configured")
 
-	if err := cleanupTemplate(target, filepath.Base(target), binaryName); err != nil {
+	if err := cleanupTemplate(target, filepath.Base(target), artifactName); err != nil {
 		showErr(err)
 		return
 	}
-	appendLog("✓ Template cleaned up (publish.sh, build-templates/, BUILD_CONTRACT.md removed)")
+	appendLog("✓ Template cleaned up")
 
 	p := Project{
 		Name:          filepath.Base(target),
-		BinaryName:    binaryName,
+		BinaryName:    artifactName,
 		Path:          target,
 		RemoteURL:     remote,
 		Provider:      provider,
@@ -263,6 +358,8 @@ func (u *ui) bootstrap(target, remote, runnerLinux, runnerWindows, lang, platfor
 		Platform:      platform,
 		RunnerLinux:   runnerLinux,
 		RunnerWindows: runnerWindows,
+		ReleaseMode:   releaseMode,
+		ReleaseFiles:  releaseFiles,
 		CreatedAt:     time.Now(),
 	}
 	if err := u.store.UpsertProject(p); err != nil {
@@ -291,7 +388,6 @@ func (u *ui) bootstrap(target, remote, runnerLinux, runnerWindows, lang, platfor
 		cp := p
 		u.current = &cp
 		u.refresh()
-		// Select the new project in the sidebar (OnSelected calls showDashboardView).
 		for i, sp := range u.sideProjects {
 			if sp.Path == p.Path {
 				u.sideList.Select(i)

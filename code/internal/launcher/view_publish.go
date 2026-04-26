@@ -83,6 +83,10 @@ func (u *ui) showPublishView(p Project) {
 			dialog.ShowError(fmt.Errorf("version must match vX.Y.Z (numbers only)"), u.window)
 			return
 		}
+		if strings.TrimSpace(added.Text) == "" && strings.TrimSpace(changed.Text) == "" && strings.TrimSpace(fixed.Text) == "" {
+			dialog.ShowError(fmt.Errorf("fill in at least one changelog section (Added, Changed or Fixed) — the workflow requires it to publish the release"), u.window)
+			return
+		}
 		msg := firstNonEmpty(added.Text, changed.Text, fixed.Text, "release")
 
 		dialog.ShowConfirm("Publish release",

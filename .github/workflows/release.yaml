@@ -33,10 +33,10 @@ jobs:
           WW="${BUILD_WINDOWS}"
 
           case "$LANG" in
-            go|python|rust|node|java|dotnet|ruby|php|c|cpp) ;;
+            go|python|rust|node|java|dotnet|ruby|php|c|cpp|script) ;;
             *)
               echo "ERROR: PROJECT_LANG invalido: $LANG"
-              echo "Valores permitidos: go | python | rust | node | java | dotnet | ruby | php | c | cpp"
+              echo "Valores permitidos: go | python | rust | node | java | dotnet | ruby | php | c | cpp | script"
               exit 1
               ;;
           esac
@@ -59,7 +59,7 @@ jobs:
               go|rust|node|dotnet|java|ruby|php)
                 CROSS_SUPPORTED="1"
                 ;;
-              python|c|cpp)
+              python|c|cpp|script)
                 CROSS_SUPPORTED="0"
                 ;;
             esac

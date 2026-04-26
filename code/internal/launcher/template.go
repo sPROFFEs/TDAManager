@@ -14,12 +14,17 @@ var crossCompilingLanguages = map[string]bool{
 	"java": true, "ruby": true, "php": true,
 }
 
-func configureTemplate(projectDir, provider, lang, platform, runnerLinux, runnerWindows, binaryName string) error {
+func configureTemplate(projectDir, provider, lang, platform, runnerLinux, runnerWindows, binaryName, releaseMode, releaseFiles string) error {
 	if err := keepProviderWorkflow(projectDir, provider); err != nil {
 		return err
 	}
 	if err := copyBuildTemplate(projectDir, lang, binaryName); err != nil {
 		return err
+	}
+	if lang == "script" {
+		if err := configureReleaseScript(filepath.Join(projectDir, "build.sh"), releaseMode, releaseFiles); err != nil {
+			return err
+		}
 	}
 	if err := configureWorkflow(projectDir, provider, lang, platform, runnerLinux, runnerWindows); err != nil {
 		return err
@@ -140,8 +145,14 @@ func configureWorkflow(projectDir, provider, lang, platform, runnerLinux, runner
 	// Scope replacements to the plan job so we don't overwrite the hardcoded
 	// per-platform values in build_native_linux / build_native_windows.
 	content = replaceEnvInJob(content, "plan", "PROJECT_LANG", lang)
-	content = replaceEnvInJob(content, "plan", "BUILD_LINUX", boolFlag(platform != "windows"))
-	content = replaceEnvInJob(content, "plan", "BUILD_WINDOWS", boolFlag(platform != "linux"))
+	// Script projects never need a Windows runner — packaging is platform-agnostic.
+	if lang == "script" {
+		content = replaceEnvInJob(content, "plan", "BUILD_LINUX", "1")
+		content = replaceEnvInJob(content, "plan", "BUILD_WINDOWS", "0")
+	} else {
+		content = replaceEnvInJob(content, "plan", "BUILD_LINUX", boolFlag(platform != "windows"))
+		content = replaceEnvInJob(content, "plan", "BUILD_WINDOWS", boolFlag(platform != "linux"))
+	}
 	// FORCE_NATIVE=1 only when the user explicitly asked for native dual-runner
 	// on a language that would otherwise cross-compile (e.g. Go+Fyne).
 	content = replaceEnvInJob(content, "plan", "FORCE_NATIVE", boolFlag(platform == "both-native"))
@@ -256,6 +267,35 @@ func replaceEnvInJob(content, jobName, key, value string) string {
 		lines[i] = "      " + key + ": '" + value + "'" + suffix
 	}
 	return strings.Join(lines, "\n")
+}
+
+// configureReleaseScript sets RELEASE_MODE and RELEASE_FILES in the generated
+// build.sh for script/no-compile projects.
+func configureReleaseScript(path, releaseMode, releaseFiles string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	content := replaceShellValue(string(data), "RELEASE_MODE", releaseMode)
+	content = replaceShellValue(content, "RELEASE_FILES", releaseFiles)
+	return os.WriteFile(path, []byte(content), 0o755)
+}
+
+// UpdateReleaseConfig rewrites APP_NAME, RELEASE_MODE and RELEASE_FILES in the
+// project's build.sh. Call this when the user edits release settings from the dashboard.
+func UpdateReleaseConfig(projectDir, archiveName, releaseMode, releaseFiles string) error {
+	path := filepath.Join(projectDir, "build.sh")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("build.sh not found: %w", err)
+	}
+	content := string(data)
+	if archiveName != "" {
+		content = replaceShellValue(content, "APP_NAME", archiveName)
+	}
+	content = replaceShellValue(content, "RELEASE_MODE", releaseMode)
+	content = replaceShellValue(content, "RELEASE_FILES", releaseFiles)
+	return os.WriteFile(path, []byte(content), 0o755)
 }
 
 func configureBuildToggles(path, platform string) error {

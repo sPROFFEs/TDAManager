@@ -29,6 +29,11 @@ type Project struct {
 	Platform      string `json:"platform"`
 	RunnerLinux   string `json:"runner_linux"`
 	RunnerWindows string `json:"runner_windows"`
+	// ReleaseMode and ReleaseFiles are only used when Language == "script".
+	// ReleaseMode: "archive" (zip code/ dir) or "files" (copy specific paths).
+	// ReleaseFiles: space-separated paths relative to code/, used when mode=files.
+	ReleaseMode  string `json:"release_mode,omitempty"`
+	ReleaseFiles string `json:"release_files,omitempty"`
 	// LegacyRunner is the field used by schema v1; kept here only so the
 	// JSON unmarshaler can read it on first launch and migrate it into
 	// RunnerLinux. The save path always strips it.
