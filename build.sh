@@ -69,24 +69,67 @@ ICON_LOOKUP_PATHS=(icon.ico assets/icon.ico "${BUILD_PACKAGE}/icon.ico" "${BUILD
 LINUX_DONE=0
 WINDOWS_DONE=0
 
-# ─── Windows .exe icon embedding (auto, no-op if no icon.ico is found) ─────
-ICON_SYSO=""
+# ─── Windows .exe icon embedding (auto, no-op if no icon source found) ──────
+ICON_EMBEDDED=0
 if [ "$BUILD_WINDOWS" = "1" ]; then
   case "$OS_NAME" in MINGW*|MSYS*|CYGWIN*)
+    # 1. Prefer a pre-existing .ico.
+    ICON_ICO=""
     for candidate in "${ICON_LOOKUP_PATHS[@]}"; do
       if [ -f "$candidate" ]; then ICON_ICO="$candidate"; break; fi
     done
-    if [ -n "${ICON_ICO:-}" ]; then
+
+    # 2. If only .png exists, convert it automatically.
+    if [ -z "$ICON_ICO" ]; then
+      PNG_SOURCE=""
+      for png in icon.png assets/icon.png; do
+        if [ -f "$png" ]; then PNG_SOURCE="$png"; break; fi
+      done
+
+      if [ -n "$PNG_SOURCE" ]; then
+        if command -v magick >/dev/null 2>&1; then
+          echo "[+] Converting $PNG_SOURCE → icon.ico via ImageMagick (magick)"
+          magick "$PNG_SOURCE" -define icon:auto-resize=16,32,48,256 icon.ico
+          ICON_ICO="icon.ico"
+        elif command -v convert >/dev/null 2>&1; then
+          echo "[+] Converting $PNG_SOURCE → icon.ico via ImageMagick (convert)"
+          convert "$PNG_SOURCE" -define icon:auto-resize=16,32,48,256 icon.ico
+          ICON_ICO="icon.ico"
+        else
+          # go-winres: pure-Go, reads PNG directly, writes the .syso itself.
+          echo "[+] ImageMagick not found, trying go-winres (pure-Go PNG → .syso)"
+          if ! command -v go-winres >/dev/null 2>&1; then
+            GOBIN="$PWD/.go/bin" go install github.com/tc-hib/go-winres@latest
+            export PATH="$PWD/.go/bin:$PATH"
+          fi
+          if command -v go-winres >/dev/null 2>&1; then
+            WINRES_SYSO="${BUILD_PACKAGE}/rsrc_windows_amd64.syso"
+            go-winres simply --icon "$PNG_SOURCE" --out "$WINRES_SYSO"
+            trap 'rm -f "'"$WINRES_SYSO"'"' EXIT
+            echo "[+] Icon embedded via go-winres → $WINRES_SYSO"
+            ICON_EMBEDDED=1
+          else
+            echo "[!] go-winres install failed, building without embedded icon"
+          fi
+        fi
+      fi
+    fi
+
+    # 3. Embed via rsrc if we have an .ico (and go-winres didn't already write the syso).
+    if [ -n "$ICON_ICO" ] && [ "$ICON_EMBEDDED" = "0" ]; then
       if ! command -v rsrc >/dev/null 2>&1; then
         echo "[+] Installing rsrc (Windows resource embedder) into .go/bin"
         GOBIN="$PWD/.go/bin" go install github.com/akavel/rsrc@latest
         export PATH="$PWD/.go/bin:$PATH"
       fi
-      ICON_SYSO="${BUILD_PACKAGE}/rsrc_windows.syso"
-      echo "[+] Embedding $ICON_ICO into Windows .exe via $ICON_SYSO"
-      rsrc -ico "$ICON_ICO" -o "$ICON_SYSO"
-      trap 'rm -f "'"$ICON_SYSO"'"' EXIT
+      RSRC_SYSO="${BUILD_PACKAGE}/rsrc_windows.syso"
+      echo "[+] Embedding $ICON_ICO into Windows .exe via $RSRC_SYSO"
+      rsrc -ico "$ICON_ICO" -o "$RSRC_SYSO"
+      trap 'rm -f "'"$RSRC_SYSO"'"' EXIT
+      ICON_EMBEDDED=1
     fi
+
+    [ "$ICON_EMBEDDED" = "0" ] && echo "[!] No icon source found, building without embedded icon"
     ;;
   esac
 fi
