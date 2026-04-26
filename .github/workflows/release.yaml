@@ -437,20 +437,52 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # MinGW gcc is required for any CGO build (Go+Fyne, C, C++). Recent
-          # windows-latest images ship MSYS2 at C:\msys64 but DON'T add its
-          # mingw64\bin to PATH for non-msys shells, so gcc isn't found by
-          # default. Add it here, falling back to choco install if msys2 is
-          # missing on the runner.
+          # MinGW gcc is required for any CGO build (Go+Fyne, C, C++).
+          # Strategy:
+          #   1. If gcc is already on PATH → done.
+          #   2. Probe well-known install locations (works for both
+          #      github-hosted runners with MSYS2 preinstalled and self-hosted
+          #      runners with manually installed MinGW).
+          #   3. Fall back to choco if available (github-hosted only).
+          #   4. Otherwise fail with installation instructions.
           if ! command -v gcc >/dev/null 2>&1; then
-            if [ -d "/c/msys64/mingw64/bin" ]; then
-              echo "C:\msys64\mingw64\bin" >> "$GITHUB_PATH"
-              export PATH="/c/msys64/mingw64/bin:$PATH"
-            else
-              choco install -y --no-progress mingw >/dev/null
-              echo "C:\ProgramData\mingw64\mingw64\bin" >> "$GITHUB_PATH"
-              export PATH="/c/ProgramData/mingw64/mingw64/bin:$PATH"
-            fi
+            # Format: "WINDOWS_PATH|UNIX_PATH" per line.
+            KNOWN_PATHS=(
+              "C:\msys64\mingw64\bin|/c/msys64/mingw64/bin"
+              "C:\ProgramData\mingw64\mingw64\bin|/c/ProgramData/mingw64/mingw64/bin"
+              "C:\mingw64\bin|/c/mingw64/bin"
+              "C:\TDM-GCC-64\bin|/c/TDM-GCC-64/bin"
+              "C:\Strawberry\c\bin|/c/Strawberry/c/bin"
+            )
+            for entry in "${KNOWN_PATHS[@]}"; do
+              win_path="${entry%|*}"; unix_path="${entry#*|}"
+              if [ -x "$unix_path/gcc.exe" ]; then
+                echo "[+] Found MinGW at $win_path"
+                echo "$win_path" >> "$GITHUB_PATH"
+                export PATH="$unix_path:$PATH"
+                break
+              fi
+            done
+          fi
+          if ! command -v gcc >/dev/null 2>&1 && command -v choco >/dev/null 2>&1; then
+            choco install -y --no-progress mingw >/dev/null
+            echo "C:\ProgramData\mingw64\mingw64\bin" >> "$GITHUB_PATH"
+            export PATH="/c/ProgramData/mingw64/mingw64/bin:$PATH"
+          fi
+          if ! command -v gcc >/dev/null 2>&1; then
+            echo "ERROR: gcc no encontrado en el runner."
+            echo ""
+            echo "Para runners self-hosted: instala MinGW-w64 manualmente y asegurate"
+            echo "de que su 'bin' esté en PATH del runner. Opciones:"
+            echo "  - MSYS2:   https://www.msys2.org/"
+            echo "             tras instalar: pacman -S mingw-w64-x86_64-gcc"
+            echo "             ruta: C:\\msys64\\mingw64\\bin"
+            echo "  - TDM-GCC: https://jmeubank.github.io/tdm-gcc/"
+            echo "             ruta: C:\\TDM-GCC-64\\bin"
+            echo "  - Chocolatey: choco install mingw"
+            echo ""
+            echo "Tras instalar, reinicia el servicio del runner para que recoja el PATH."
+            exit 1
           fi
           gcc --version | head -n 1
 
