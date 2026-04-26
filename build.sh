@@ -91,11 +91,8 @@ if [ "$BUILD_WINDOWS" = "1" ]; then
           echo "[+] Converting $PNG_SOURCE → icon.ico via ImageMagick (magick)"
           magick "$PNG_SOURCE" -define icon:auto-resize=16,32,48,256 icon.ico
           ICON_ICO="icon.ico"
-        elif command -v convert >/dev/null 2>&1; then
-          echo "[+] Converting $PNG_SOURCE → icon.ico via ImageMagick (convert)"
-          convert "$PNG_SOURCE" -define icon:auto-resize=16,32,48,256 icon.ico
-          ICON_ICO="icon.ico"
         else
+          # On Windows, `convert` is the system disk utility — skip it entirely.
           # go-winres: pure-Go, reads PNG directly, writes the .syso itself.
           echo "[+] ImageMagick not found, trying go-winres (pure-Go PNG → .syso)"
           if ! command -v go-winres >/dev/null 2>&1; then
