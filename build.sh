@@ -55,6 +55,12 @@ LDFLAGS_WINDOWS="${LDFLAGS_COMMON} -H=windowsgui"
 
 EXTRA_BUILD_FLAGS=(-trimpath -buildvcs=false)
 
+# Windows .exe icon. Auto-detects icon.ico in any of these locations (first
+# match wins). Leave the file out and the build proceeds without a custom
+# icon. To generate a multi-resolution icon.ico from a PNG:
+#   magick icon.png -define icon:auto-resize=16,32,48,256 icon.ico
+ICON_LOOKUP_PATHS=(icon.ico assets/icon.ico "${BUILD_PACKAGE}/icon.ico" "${BUILD_PACKAGE}/assets/icon.ico")
+
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║ 🔨  BUILD STEPS — EDIT / ADD / REMOVE FREELY                               ║
@@ -62,6 +68,28 @@ EXTRA_BUILD_FLAGS=(-trimpath -buildvcs=false)
 
 LINUX_DONE=0
 WINDOWS_DONE=0
+
+# ─── Windows .exe icon embedding (auto, no-op if no icon.ico is found) ─────
+ICON_SYSO=""
+if [ "$BUILD_WINDOWS" = "1" ]; then
+  case "$OS_NAME" in MINGW*|MSYS*|CYGWIN*)
+    for candidate in "${ICON_LOOKUP_PATHS[@]}"; do
+      if [ -f "$candidate" ]; then ICON_ICO="$candidate"; break; fi
+    done
+    if [ -n "${ICON_ICO:-}" ]; then
+      if ! command -v rsrc >/dev/null 2>&1; then
+        echo "[+] Installing rsrc (Windows resource embedder) into .go/bin"
+        GOBIN="$PWD/.go/bin" go install github.com/akavel/rsrc@latest
+        export PATH="$PWD/.go/bin:$PATH"
+      fi
+      ICON_SYSO="${BUILD_PACKAGE}/rsrc_windows.syso"
+      echo "[+] Embedding $ICON_ICO into Windows .exe via $ICON_SYSO"
+      rsrc -ico "$ICON_ICO" -o "$ICON_SYSO"
+      trap 'rm -f "'"$ICON_SYSO"'"' EXIT
+    fi
+    ;;
+  esac
+fi
 
 # ─── Linux build (only runs on the Linux runner) ───────────────────────────
 if [ "$BUILD_LINUX" = "1" ] && [ "$OS_NAME" = "Linux" ]; then
