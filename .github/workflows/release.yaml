@@ -432,17 +432,37 @@ jobs:
         with:
           php-version: ${{ env.PHP_VERSION }}
 
+      - name: Setup MinGW (Windows)
+        if: ${{ env.PROJECT_LANG == 'go' || env.PROJECT_LANG == 'c' || env.PROJECT_LANG == 'cpp' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # MinGW gcc is required for any CGO build (Go+Fyne, C, C++). Recent
+          # windows-latest images ship MSYS2 at C:\msys64 but DON'T add its
+          # mingw64\bin to PATH for non-msys shells, so gcc isn't found by
+          # default. Add it here, falling back to choco install if msys2 is
+          # missing on the runner.
+          if ! command -v gcc >/dev/null 2>&1; then
+            if [ -d "/c/msys64/mingw64/bin" ]; then
+              echo "C:\msys64\mingw64\bin" >> "$GITHUB_PATH"
+              export PATH="/c/msys64/mingw64/bin:$PATH"
+            else
+              choco install -y --no-progress mingw >/dev/null
+              echo "C:\ProgramData\mingw64\mingw64\bin" >> "$GITHUB_PATH"
+              export PATH="/c/ProgramData/mingw64/mingw64/bin:$PATH"
+            fi
+          fi
+          gcc --version | head -n 1
+
       - name: Setup C/C++ toolchain (Windows)
         if: ${{ env.PROJECT_LANG == 'c' || env.PROJECT_LANG == 'cpp' }}
         shell: bash
         run: |
           set -euo pipefail
-          # Windows runners normally ship MinGW, MSVC, and CMake. GNU make is
-          # often missing — install it via Chocolatey if it's not on PATH.
+          # GNU make is often missing on windows-latest — install if absent.
           if ! command -v make >/dev/null 2>&1; then
             choco install -y --no-progress make >/dev/null
           fi
-          gcc --version | head -n 1 || true
           cmake --version | head -n 1 || true
           make --version | head -n 1
 
