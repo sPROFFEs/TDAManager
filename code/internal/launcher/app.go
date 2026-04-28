@@ -220,7 +220,16 @@ func (u *ui) buildSidebar() fyne.CanvasObject {
 		u.showBootstrapView()
 	})
 	newBtn.Importance = widget.HighImportance
-	newBtnRow := container.New(layout.NewCustomPaddedLayout(8, 8, 10, 10), newBtn)
+
+	openBtn := widget.NewButtonWithIcon("Open existing", theme.FolderOpenIcon(), func() {
+		u.sideList.UnselectAll()
+		u.showOpenView()
+	})
+	openBtn.Importance = widget.LowImportance
+
+	btnRow := container.New(layout.NewCustomPaddedLayout(8, 8, 10, 10),
+		container.NewVBox(newBtn, openBtn),
+	)
 
 	sep := canvas.NewRectangle(colorBorder)
 	sep.SetMinSize(fyne.NewSize(0, 1))
@@ -228,7 +237,7 @@ func (u *ui) buildSidebar() fyne.CanvasObject {
 	bg := canvas.NewRectangle(colorSidebar)
 	content := container.NewBorder(
 		container.NewVBox(styledHeader, sep),
-		container.NewVBox(sep, newBtnRow),
+		container.NewVBox(sep, btnRow),
 		nil, nil,
 		u.sideList,
 	)

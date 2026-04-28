@@ -129,6 +129,10 @@ func (flowTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 		return colorSurface
 	case theme.ColorNameInputBorder:
 		return colorBorder
+	case theme.ColorNameDisabled:
+		// Disabled widget text (e.g. read-only log boxes). Fyne's default is
+		// near-black, which vanishes on dark surfaces — use muted instead.
+		return colorMuted
 	case theme.ColorNamePlaceHolder:
 		return colorMuted
 	case theme.ColorNameScrollBar:
